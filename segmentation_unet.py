@@ -13,6 +13,8 @@ import skimage.io as skio
 import argparse
 import os
 import matplotlib.pyplot as plt
+import skimage.transform
+import random
 
 with tf.device('/gpu:0'):
     config = tf.ConfigProto(log_device_placement=True)
@@ -98,18 +100,46 @@ def get_unet_small(rows, cols):
 
     return model
 
-def generate_report(args, history, experiment_name):
+def show_sample_segmentation(rows, model, path):
+    tmp_model = get_unet_small(1024, 2048)
+    for i in range(len(model.layers)):
+        tmp_model.layers[i].set_weights(model.layers[i].get_weights())
+    state = random.getstate()
+    random.seed(13)
+    figure, plots = plt.subplots(rows, 2, gridspec_kw={'wspace': 0.05, 'hspace': 0.05})
+    figure.set_size_inches(20, 27)
+    for i in range(rows):
+        img_id = random.randint(1, 24967)
+        super_input = skio.imread('data/images/{:05}.png'.format(img_id))
+        super_input = skimage.transform.resize(super_input, (1024, 2048), preserve_range=True)
+        tmp = super_input.astype(np.float32)
+        tmp /= 127.5
+        tmp -= 1.0
+        res = tmp_model.predict(np.array([tmp]))
+        plots[i][0].axis('off')
+        plots[i][0].imshow(super_input / 255)
+        res = np.squeeze(res[0], axis=2)
+        plots[i][1].axis('off')
+        plots[i][1].imshow(res)
+    plt.savefig(os.path.join(path, 'examples.png'))
+    random.setstate(state)
+
+def generate_report(model, args, history, experiment_name):
     plt.plot(np.arange(1, len(history.history['acc']) + 1), history.history['acc'])
     plt.plot(np.arange(1, len(history.history['acc']) + 1), history.history['loss'])
     plt.plot(np.arange(1, len(history.history['acc']) + 1), history.history['val_loss'])
     plt.plot(np.arange(1, len(history.history['acc']) + 1), history.history['val_acc'])
     plt.legend(['acc', 'loss', 'val_locc', 'val_acc'])
-    os.mkdir(os.path.join('experiments', experiment_name))
-    plt.savefig(os.path.join('experiments', experiment_name, 'plot.png'), figsize=(20, 10))
-    with open(os.path.join('experiments', experiment_name, 'report.md'), 'w') as f:
+    path = os.path.join('experiments', experiment_name)
+    os.mkdir(path)
+    plt.savefig(os.path.join(path, 'plot.png'), figsize=(20, 10))
+    show_sample_segmentation(5, model, path)
+    with open(os.path.join(path, 'report.md'), 'w') as f:
         f.write('# {}\n'.format(experiment_name))
         f.write('Arguments: {}\n'.format(args))
         f.write('\n![plot](plot.png)\n')
+        f.write('# Segmentation examples\n')
+        f.write('![examples](examples.png)\n')
 
 def main():
     parser = argparse.ArgumentParser()
@@ -127,7 +157,7 @@ def main():
     print('Fitting model...')
     history = model.fit(imgs_train, imgs_mask_train, batch_size=args.batch_size, epochs=args.epochs,
                         verbose=1,validation_split=0.2, shuffle=True, callbacks=[model_checkpoint])
-    generate_report(args, history, args.experiment_name)
+    generate_report(model, args, history, args.experiment_name)
    
 if __name__ == '__main__':
     main()
