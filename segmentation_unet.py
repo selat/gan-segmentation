@@ -11,7 +11,7 @@ from keras.optimizers import *
 from keras.callbacks import ModelCheckpoint, LearningRateScheduler
 import skimage.io as skio
 import argparse
-
+import os
 import matplotlib.pyplot as plt
 
 with tf.device('/gpu:0'):
@@ -98,21 +98,24 @@ def get_unet_small(rows, cols):
 
     return model
 
-def generate_report(args, history):
+def generate_report(args, history, experiment_name):
     plt.plot(np.arange(1, len(history.history['acc']) + 1), history.history['acc'])
     plt.plot(np.arange(1, len(history.history['acc']) + 1), history.history['loss'])
     plt.plot(np.arange(1, len(history.history['acc']) + 1), history.history['val_loss'])
     plt.plot(np.arange(1, len(history.history['acc']) + 1), history.history['val_acc'])
     plt.legend(['acc', 'loss', 'val_locc', 'val_acc'])
-    plt.savefig('superfig.png', figsize=(20, 10))
-    with open('report.md', 'w') as f:
+    os.mkdir(os.path.join('experiments', experiment_name))
+    plt.savefig(os.path.join('experiments', experiment_name, 'plot.png'), figsize=(20, 10))
+    with open(os.path.join('experiments', experiment_name, 'report.md'), 'w') as f:
+        f.write('# {}\n'.format(experiment_name))
         f.write('Arguments: {}\n'.format(args))
-        f.write('\n![plot][superfig.png]\n')
+        f.write('\n![plot](plot.png)\n')
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--size', type=int, dest='size', required=True, help='crop size')
     parser.add_argument('--model_name', type=str, dest='model_name', required=True, help='name of the model')
+    parser.add_argument('--experiment_name', type=str, required=True, help='name of the experiment')
     args = parser.parse_args()
     imgs_train, imgs_mask_train = load_data(args.size, args.size)
     imgs_val, imgs_mask_val = load_data(args.size, args.size, start_index=3001)
@@ -121,7 +124,7 @@ def main():
     print('Fitting model...')
     history = model.fit(imgs_train, imgs_mask_train, batch_size=100, epochs=10,
                         verbose=1,validation_split=0.2, shuffle=True, callbacks=[model_checkpoint])
-    generate_report(args, history)
+    generate_report(args, history, args.experiment_name)
    
 if __name__ == '__main__':
     main()
