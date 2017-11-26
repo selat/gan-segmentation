@@ -115,14 +115,17 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--size', type=int, dest='size', required=True, help='crop size')
     parser.add_argument('--model_name', type=str, dest='model_name', required=True, help='name of the model')
+    parser.add_argument('--epochs', type=int, default=10, help='number of epochs')
+    parser.add_argument('--crops_num', type=int, default=30, help='number of crops')
     parser.add_argument('--experiment_name', type=str, required=True, help='name of the experiment')
+    parser.add_argument('--batch_size', type=int, default=100, help='size of the training batch')
     args = parser.parse_args()
-    imgs_train, imgs_mask_train = load_data(args.size, args.size)
-    imgs_val, imgs_mask_val = load_data(args.size, args.size, start_index=3001)
+    imgs_train, imgs_mask_train = load_data(args.size, args.size, crops_num=args.crops_num)
+    imgs_val, imgs_mask_val = load_data(args.size, args.size, crops_num=args.crops_num, start_index=3001)
     model = get_unet_small(args.size, args.size)
     model_checkpoint = ModelCheckpoint(args.model_name + '.hdf5', monitor='loss',verbose=1, save_best_only=True)
     print('Fitting model...')
-    history = model.fit(imgs_train, imgs_mask_train, batch_size=100, epochs=10,
+    history = model.fit(imgs_train, imgs_mask_train, batch_size=args.batch_size, epochs=args.epochs,
                         verbose=1,validation_split=0.2, shuffle=True, callbacks=[model_checkpoint])
     generate_report(args, history, args.experiment_name)
    
