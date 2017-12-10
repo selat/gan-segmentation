@@ -23,87 +23,67 @@ with tf.device('/gpu:0'):
     config.gpu_options.per_process_gpu_memory_fraction = 0.4
     keras.set_session(tf.Session(config=config))
 
-def simple_generator(path_images, path_masks, batch_size=5, crop_size=128):
-    files_images = sorted(os.listdir(path_images))
-    files_masks = sorted(os.listdir(path_masks))
+def simple_generator(path_images, path_masks, crops_num=1, batch_size=5, crop_size=128):
+    files_images = sorted(os.listdir(path_images))[:20000]
+    files_masks = sorted(os.listdir(path_masks))[:20000]
     while True:
-        images = np.zeros((batch_size, crop_size, crop_size, 3), dtype=np.float32)
-        masks = np.zeros((batch_size, crop_size, crop_size, 1), dtype=np.float32)
+        images = np.zeros((batch_size * crops_num, crop_size, crop_size, 3), dtype=np.float32)
+        masks = np.zeros((batch_size * crops_num, crop_size, crop_size, 1), dtype=np.float32)
         for i in range(batch_size):
             cur_id = np.random.randint(len(files_images))
             img = skio.imread(os.path.join(path_images, files_images[cur_id]))
             mask = skio.imread(os.path.join(path_masks, files_masks[cur_id]))
-            startrow = np.random.randint(img.shape[0] - crop_size)
-            startcol = np.random.randint(img.shape[1] - crop_size)
-            img_crop = img[startrow:startrow + crop_size, startcol:startcol + crop_size]
-            mask_crop = mask[startrow:startrow + crop_size, startcol:startcol + crop_size]
-            mask_crop = np.all(mask_crop == (128, 64, 128), axis=-1).astype(np.float32)
-            mask_crop = np.expand_dims(mask_crop, axis=2)
-            images[i] = img_crop
-            masks[i] = mask_crop
-        seq = iaa.Sequential([
-            iaa.Fliplr(0.5)], random_order=True)
-        ia.seed(1)
-        images = seq.augment_images(images)
-        ia.seed(1)
-        masks = seq.augment_images(masks)
+            for j in range(crops_num):
+                startrow = np.random.randint(img.shape[0] - crop_size)
+                startcol = np.random.randint(img.shape[1] - crop_size)
+                img_crop = img[startrow:startrow + crop_size, startcol:startcol + crop_size]
+                mask_crop = mask[startrow:startrow + crop_size, startcol:startcol + crop_size]
+                mask_crop = np.all(mask_crop == (128, 64, 128), axis=-1).astype(np.float32)
+                mask_crop = np.expand_dims(mask_crop, axis=2)
+                images[i * crops_num + j] = img_crop
+                masks[i * crops_num + j] = mask_crop
+#         seq = iaa.Sequential([
+#             iaa.Fliplr(0.5),
+#             iaa.Affine(scale=(0.5, 1.5), shear=(-32, 32))], random_order=True)
+#         ia.seed(1)
+#         images = seq.augment_images(images)
+#         ia.seed(1)
+#         masks = seq.augment_images(masks)
+
+#         seq_img = iaa.Sequential([
+#             iaa.ContrastNormalization((0.5, 1.5))],
+#             random_order=True)
+#         images = seq_img.augment_images(images)
         images /= 127.5
         images -= 1.0
         yield images, masks
 
-def get_unet_small(rows, cols):
-    inputs = Input((rows, cols,3))
+def get_unet(rows, cols, layers_num):
+    prev_layer = inputs = Input((rows, cols, 3))
+    cur_filters_num = 16
+    convs = []
+    for l in range(layers_num):
+        conv = Conv2D(cur_filters_num, 3, activation='relu', padding='same', kernel_initializer='he_normal')(prev_layer)
+        conv = Conv2D(cur_filters_num, 3, activation='relu', padding='same', kernel_initializer='he_normal')(conv)
+        convs.append(conv)
+        pool = MaxPooling2D(pool_size=(2, 2))(conv)
+        prev_layer = pool
+        cur_filters_num *= 2
 
-    conv1 = Conv2D(16, (3, 3), activation = 'relu', padding = 'same', kernel_initializer = 'he_normal')(inputs)
-    print "conv1 shape:",conv1.shape
-    conv1 = Conv2D(16, (3, 3), activation = 'relu', padding = 'same', kernel_initializer = 'he_normal')(conv1)
-    print "conv1 shape:",conv1.shape
-    pool1 = MaxPooling2D(pool_size=(2, 2))(conv1)
-    print "pool1 shape:",pool1.shape
+    conv = Conv2D(cur_filters_num, 3, activation='relu', padding='same', kernel_initializer='he_normal')(prev_layer)
+    conv = Conv2D(cur_filters_num, 3, activation='relu', padding='same', kernel_initializer='he_normal')(conv)
+    drop = Dropout(0.5)(conv)
 
-    conv2 = Conv2D(32, (3, 3), activation = 'relu', padding = 'same', kernel_initializer = 'he_normal')(pool1)
-    print "conv2 shape:",conv2.shape
-    conv2 = Conv2D(32, (3, 3), activation = 'relu', padding = 'same', kernel_initializer = 'he_normal')(conv2)
-    print "conv2 shape:",conv2.shape
-    pool2 = MaxPooling2D(pool_size=(2, 2))(conv2)
-    print "pool2 shape:",pool2.shape
+    prev_layer = drop
+    for l in range(layers_num):
+        up = concatenate([UpSampling2D(size=(2, 2))(prev_layer), convs[-l - 1]], axis=3)
+        cur_filters_num //= 2
+        conv = Conv2D(cur_filters_num, 3, activation='relu', padding='same')(up)
+        conv = Conv2D(cur_filters_num, 3, activation='relu', padding='same')(conv)
+        prev_layer = conv
 
-    conv3 = Conv2D(64, (3, 3), activation = 'relu', padding = 'same', kernel_initializer = 'he_normal')(pool2)
-    print "conv3 shape:",conv3.shape
-    conv3 = Conv2D(64, (3, 3), activation = 'relu', padding = 'same', kernel_initializer = 'he_normal')(conv3)
-    print "conv3 shape:",conv3.shape
-    pool3 = MaxPooling2D(pool_size=(2, 2))(conv3)
-    print "pool3 shape:",pool3.shape
-
-    conv4 = Conv2D(128, (3, 3), activation = 'relu', padding = 'same', kernel_initializer = 'he_normal')(pool3)
-    conv4 = Conv2D(128, (3, 3), activation = 'relu', padding = 'same', kernel_initializer = 'he_normal')(conv4)
-    drop4 = Dropout(0.5)(conv4)
-    pool4 = MaxPooling2D(pool_size=(2, 2))(drop4)
-
-    conv5 = Conv2D(256, (3, 3), activation = 'relu', padding = 'same', kernel_initializer = 'he_normal')(pool4)
-    conv5 = Conv2D(256, (3, 3), activation = 'relu', padding = 'same', kernel_initializer = 'he_normal')(conv5)
-    drop5 = Dropout(0.5)(conv5)
-
-    up6 = concatenate([UpSampling2D(size=(2, 2))(conv5), conv4], axis=3)
-    conv6 = Conv2D(128, (3, 3), activation='relu', padding='same')(up6)
-    conv6 = Conv2D(128, (3, 3), activation='relu', padding='same')(conv6)
-
-    up7 = concatenate([UpSampling2D(size=(2, 2))(conv6), conv3], axis=3)
-    conv7 = Conv2D(64, (3, 3), activation='relu', padding='same')(up7)
-    conv7 = Conv2D(64, (3, 3), activation='relu', padding='same')(conv7)
-
-    up8 = concatenate([UpSampling2D(size=(2, 2))(conv7), conv2], axis=3)
-    conv8 = Conv2D(32, (3, 3), activation='relu', padding='same')(up8)
-    conv8 = Conv2D(32, (3, 3), activation='relu', padding='same')(conv8)
-
-    up9 = concatenate([UpSampling2D(size=(2, 2))(conv8), conv1], axis=3)
-    conv9 = Conv2D(16, (3, 3), activation='relu', padding='same')(up9)
-    conv9 = Conv2D(16, (3, 3), activation='relu', padding='same')(conv9)
-
-    conv10 = Conv2D(1, (1, 1), activation='sigmoid')(conv9)
-
-    model = Model(inputs=inputs, outputs=conv10)
-
+    conv = Conv2D(1, 1, activation='sigmoid')(prev_layer)
+    model = Model(inputs=inputs, outputs=conv)
     model.compile(optimizer = Adam(lr = 1e-4), loss = 'binary_crossentropy', metrics = ['accuracy'])
 
     return model
@@ -160,17 +140,19 @@ def main():
     parser.add_argument('--crops_num', type=int, default=30, help='number of crops')
     parser.add_argument('--experiment_name', type=str, required=True, help='name of the experiment')
     parser.add_argument('--batch_size', type=int, default=100, help='size of the training batch')
+    parser.add_argument('--steps_per_epoch', type=int, default=50, help='steps per epoch')
     args = parser.parse_args()
-    model = get_unet_small(args.size, args.size)
+    model = get_unet(args.size, args.size, 4)
     model_checkpoint = ModelCheckpoint(args.model_name + '.hdf5', monitor='loss',verbose=0, save_best_only=True)
     print('Fitting model...')
-    gen = simple_generator('data/images', 'data/labels', batch_size=args.batch_size, crop_size=args.size)
-    val_gen = simple_generator('data/images', 'data/labels', batch_size=args.batch_size, crop_size=args.size)
+    gen = simple_generator('data/images', 'data/labels', crops_num=args.crops_num,
+                           batch_size=args.batch_size, crop_size=args.size)
+    val_gen = simple_generator('data/images', 'data/labels', crops_num=args.crops_num,
+                               batch_size=args.batch_size, crop_size=args.size)
     history = model.fit_generator(
         generator=gen,
-        validation_data=val_gen,
-        validation_steps=5,
-        steps_per_epoch=50,
+        validation_data=val_gen.next(),
+        steps_per_epoch=args.steps_per_epoch,
         epochs=args.epochs,
         callbacks=[model_checkpoint])
     generate_report(model, args, history, args.experiment_name)
